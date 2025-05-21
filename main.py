@@ -1,101 +1,132 @@
 import discord
-from discord import app_commands
-from discord.ext import commands
-import aiohttp
-import asyncio
 import os
+from discord.ext import commands
 from dotenv import load_dotenv
 from flask import Flask
 import threading
+from utils import check_ban
+
+app = Flask(__name__)
 
 load_dotenv()
-
+APPLICATION_ID = os.getenv("APPLICATION_ID")
 TOKEN = os.getenv("TOKEN")
 
 intents = discord.Intents.default()
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Flask setup
-app = Flask(__name__)
+DEFAULT_LANG = "en"
+user_languages = {}
 
-@app.route("/")
-def index():
-    return "Bot is running!"
+nomBot = "None"
+
+@app.route('/')
+def home():
+    global nomBot
+    return f"Bot {nomBot} is working"
 
 def run_flask():
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host='0.0.0.0', port=10000)
 
-# Run Flask in a separate thread
 threading.Thread(target=run_flask).start()
-
-# Your async check_ban function
-async def check_ban(uid: str):
-    api_url = f"https://api-check-ban.up.railway.app/check_ban/{uid}"
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(api_url) as response:
-                if response.status != 200:
-                    print(f"[WARN] API returned status code {response.status}")
-                    return None
-
-                response_data = await response.json()
-
-                if response_data.get("status") == 200:
-                    data = response_data.get("data", {})
-                    return {
-                        "is_banned": data.get("is_banned", 0),
-                        "nickname": data.get("nickname", ""),
-                        "period": data.get("period", 0),
-                        "region": data.get("region", 0)
-                    }
-                else:
-                    print(f"[INFO] API error: {response_data.get('message', 'Unknown error')}")
-                    return None
-
-    except aiohttp.ClientError as e:
-        print(f"[ERROR] HTTP request failed: {e}")
-    except Exception as e:
-        print(f"[ERROR] Unexpected error: {e}")
-
-    return None
-
-# Slash command
-@bot.tree.command(name="check", description="Check if a UID is banned")
-@app_commands.describe(uid="The user ID to check")
-async def check(interaction: discord.Interaction, uid: str):
-    await interaction.response.defer()
-
-    result = await check_ban(uid)
-    
-    if result is None:
-        await interaction.followup.send("❌ Unable to check ban status or invalid UID.")
-        return
-
-    if result["is_banned"]:
-        message = (
-            f"🚫 **User is BANNED**\n"
-            f"**Nickname:** {result['nickname']}\n"
-            f"**Region:** {result['region']}\n"
-            f"**Ban Period:** {result['period']} days"
-        )
-    else:
-        message = (
-            f"✅ **User is NOT banned**\n"
-            f"**Nickname:** {result['nickname']}\n"
-            f"**Region:** {result['region']}"
-        )
-
-    await interaction.followup.send(message)
 
 @bot.event
 async def on_ready():
-    print(f"Bot is online as {bot.user}")
-    try:
-        await bot.tree.sync(guild=1323126226759450634)  # Faster dev sync, optional
-        print("Slash commands synced.")
-    except Exception as e:
-        print(f"Failed to sync commands: {e}")
+    global nomBot
+    nomBot = f"{bot.user}"
+    print(f"Le bot est connecté en tant que {bot.user}")
 
-# Run the bot
+@bot.command(name="guilds")
+async def show_guilds(ctx):
+    guild_names = [f"{i+1}. {guild.name}" for i, guild in enumerate(bot.guilds)]
+    guild_list = "\n".join(guild_names)
+    await ctx.send(f"Le bot est dans les guilds suivantes :\n{guild_list}")
+
+@bot.command(name="lang")
+async def change_language(ctx, lang_code: str):
+    lang_code = lang_code.lower()
+    if lang_code not in ["en", "fr"]:
+        await ctx.send("❌ Invalid language. Available: en, fr")
+        return
+
+    user_languages[ctx.author.id] = lang_code
+    message = "✅ Language set to English." if lang_code == 'en' else "✅ Langue définie sur le français."
+    await ctx.send(f"{ctx.author.mention} {message}")
+
+@bot.command(name="check")
+async def check_ban_command(ctx):
+    content = ctx.message.content
+    user_id = content[3:].strip()
+    lang = user_languages.get(ctx.author.id, "en")
+
+    print(f"Commande fait par {ctx.author} (lang={lang})")
+
+    if not user_id.isdigit():
+        message = {
+            "en": f"{ctx.author.mention} ❌ **Invalid UID!**\n➡️ Please use: !check 123456789",
+            "fr": f"{ctx.author.mention} ❌ **UID invalide !**\n➡️ Veuillez fournir un UID valide sous la forme : !check 123456789"
+        }
+        await ctx.send(message[lang])
+        return
+
+    async with ctx.typing():
+        try:
+            ban_status = await check_ban(user_id)
+        except Exception as e:
+            await ctx.send(f"{ctx.author.mention} ⚠️ Error:\n
+{str(e)}
+")
+            return
+
+        if ban_status is None:
+            message = {
+                "en": f"{ctx.author.mention} ❌ **Could not get information. Please try again later.**",
+                "fr": f"{ctx.author.mention} ❌ **Impossible d'obtenir les informations.**\nVeuillez réessayer plus tard."
+            }
+            await ctx.send(message[lang])
+            return
+
+        is_banned = int(ban_status.get("is_banned", 0))
+        period = ban_status.get("period", "N/A")
+        nickname = ban_status.get("nickname", "NA")
+        region = ban_status.get("region", "N/A")
+        id_str = f"{user_id}"
+
+        if isinstance(period, int):
+            period_str = f"more than {period} months" if lang == "en" else f"plus de {period} mois"
+        else:
+            period_str = "unavailable" if lang == "en" else "indisponible"
+
+        embed = discord.Embed(
+            color=0xFF0000 if is_banned else 0x00FF00,
+            timestamp=ctx.message.created_at
+        )
+
+        if is_banned:
+            embed.title = "**▌ Banned Account 🛑 **" if lang == "en" else "**▌ Compte banni 🛑 **"
+            embed.description = (
+                f"**• {'Reason' if lang == 'en' else 'Raison'} :** "
+                f"{'This account was confirmed for using cheats.' if lang == 'en' else 'Ce compte a été confirmé comme utilisant des hacks.'}\n"
+                f"**• {'Suspension duration' if lang == 'en' else 'Durée de la suspension'} :** {period_str}\n"
+                f"**• {'Nickname' if lang == 'en' else 'Pseudo'} :** {nickname}\n"
+                f"**• {'Player ID' if lang == 'en' else 'ID du joueur'} :** {id_str}\n"
+                f"**• {'Region' if lang == 'en' else 'Région'} :** {region}"
+            )
+            embed.set_image(url="https://i.ibb.co/wFxTy8TZ/banned.gif")
+        else:
+            embed.title = "**▌ Clean Account ✅ **" if lang == "en" else "**▌ Compte non banni ✅ **"
+            embed.description = (
+                f"**• {'Status' if lang == 'en' else 'Statut'} :** "
+                f"{'No sufficient evidence of cheat usage on this account.' if lang == 'en' else 'Aucune preuve suffisante pour confirmer l’utilisation de hacks sur ce compte.'}\n"
+                f"**• {'Nickname' if lang == 'en' else 'Pseudo'} :** {nickname}\n"
+                f"**• {'Player ID' if lang == 'en' else 'ID du joueur'} :** {id_str}\n"
+                f"**• {'Region' if lang == 'en' else 'Région'} :** {region}"
+            )
+            embed.set_image(url="https://i.ibb.co/Kx1RYVKZ/notbanned.gif")
+
+        embed.set_thumbnail(url=ctx.author.avatar.url if ctx.author.avatar else ctx.author.default_avatar.url)
+        embed.set_footer(text="📌  Garena Free Fire")
+        await ctx.send(f"{ctx.author.mention}", embed=embed)
+
 bot.run(TOKEN)
