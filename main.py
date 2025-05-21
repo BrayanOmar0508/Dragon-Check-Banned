@@ -34,7 +34,9 @@ user_languages = {}
 
 @bot.event
 async def on_ready():
-    await tree.sync()
+    GUILD_ID = 1323126226759450634  # Replace with your real guild ID
+    await tree.sync(guild=discord.Object(id=GUILD_ID))
+    print(f"✅ Synced commands to guild {GUILD_ID}")
     print(f"✅ Bot connected as {bot.user}")
 
 @tree.command(name="lang", description="Change your preferred language (en/fr)")
