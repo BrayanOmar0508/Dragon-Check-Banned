@@ -11,7 +11,6 @@ import threading
 load_dotenv()
 
 TOKEN = os.getenv("TOKEN")
-GUILD_ID = discord.Object(id=int(os.getenv("1323126226759450634")))  # Optional: For faster slash command registration
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -93,7 +92,7 @@ async def check(interaction: discord.Interaction, uid: str):
 async def on_ready():
     print(f"Bot is online as {bot.user}")
     try:
-        await bot.tree.sync(guild=GUILD_ID)  # Faster dev sync, optional
+        await bot.tree.sync(guild=1323126226759450634)  # Faster dev sync, optional
         print("Slash commands synced.")
     except Exception as e:
         print(f"Failed to sync commands: {e}")
